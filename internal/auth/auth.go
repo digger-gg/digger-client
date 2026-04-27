@@ -129,8 +129,14 @@ func Login(ctx context.Context, baseURL string, print func(string)) (*Result, er
 	}
 }
 
+// openBrowserOverride lets tests stub out the actual exec.
+var openBrowserOverride func(string) error
+
 // openBrowser opens the given URL in the platform default browser.
 func openBrowser(url string) error {
+	if openBrowserOverride != nil {
+		return openBrowserOverride(url)
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":

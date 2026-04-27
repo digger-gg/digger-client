@@ -46,14 +46,14 @@ func main() {
 			fmt.Println(version)
 			return
 		case "help", "--help", "-h":
-			fmt.Println(usage)
+			fmt.Print(usage)
 			return
 		}
 	}
 	cmdRun(os.Args[1:])
 }
 
-const usage = `digger ` + ` -- host a game server, anywhere
+const usage = `digger -- host a game server, anywhere
 
 usage:
   digger                            launch the TUI
