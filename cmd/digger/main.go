@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -90,8 +91,15 @@ func cmdRun(args []string) {
 	// with --no-auth or by setting an explicit join string on the cmdline.
 	if !*skipAuth && loaded.Token == "" && join == "" {
 		if err := runLogin(&loaded); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			if errors.Is(err, auth.ErrAuthUnavailable) {
+				// Server says it doesn't know how to authenticate us yet.
+				// Continue to the TUI — the relay's shared secret is
+				// still in play.
+				fmt.Fprintln(os.Stderr, "  (skipping sign-in — server auth not configured)")
+			} else {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
 		}
 	}
 

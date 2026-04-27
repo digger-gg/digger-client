@@ -16,6 +16,10 @@ import (
 	"time"
 )
 
+// ErrAuthUnavailable is returned when the server replies 503 to start,
+// meaning Firebase isn't configured yet on the auth server.
+var ErrAuthUnavailable = errors.New("auth not configured on server")
+
 // User mirrors the JSON the server returns.
 type User struct {
 	UID         string `json:"uid"`
@@ -63,6 +67,11 @@ func Login(ctx context.Context, baseURL string, print func(string)) (*Result, er
 		return nil, fmt.Errorf("start: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == 503 {
+		// Server explicitly told us auth isn't configured — caller can
+		// catch this and skip the login step.
+		return nil, ErrAuthUnavailable
+	}
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return nil, fmt.Errorf("start: HTTP %d: %s", resp.StatusCode, string(body))
