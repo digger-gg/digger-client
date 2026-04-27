@@ -24,6 +24,13 @@ type Config struct {
 	Relay  string `toml:"relay"`
 	Secret string `toml:"secret"`
 	Theme  string `toml:"theme"`
+
+	// Identity, set by `digger login`.
+	Token       string `toml:"token,omitempty"`
+	UserUID     string `toml:"user_uid,omitempty"`
+	UserEmail   string `toml:"user_email,omitempty"`
+	UserName    string `toml:"user_name,omitempty"`
+	UserPicture string `toml:"user_picture,omitempty"`
 }
 
 func dir() (string, error) {

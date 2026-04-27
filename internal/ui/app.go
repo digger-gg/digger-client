@@ -53,6 +53,11 @@ type App struct {
 	clientCtx context.Context
 	cancel    context.CancelFunc
 	snapshot  client.Snapshot
+
+	// identity from `digger login` (empty = not signed in)
+	userUID   string
+	userName  string
+	userEmail string
 }
 
 func New() App {
@@ -244,10 +249,17 @@ type RunOptions struct {
 	InitialSecret string
 	// If non-empty, select this theme by name.
 	StartingThemeName string
+	// Logged-in user identity (from `digger login`). Empty = not signed in.
+	UserUID   string
+	UserName  string
+	UserEmail string
 }
 
 func Run(opts RunOptions, _ []games.Preset) error {
 	a := New()
+	a.userUID = opts.UserUID
+	a.userName = opts.UserName
+	a.userEmail = opts.UserEmail
 	if opts.StartingThemeName != "" {
 		all := theme.All()
 		for i, t := range all {

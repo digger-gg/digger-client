@@ -88,8 +88,17 @@ func (a App) renderHeader() string {
 	}
 
 	traffic := s.Subtle.Render(fmt.Sprintf("↑ %s   ↓ %s", humanBytes(snap.BytesUp), humanBytes(snap.BytesDown)))
+	identity := s.Subtle.Render("not signed in  ·  digger login")
+	if a.userEmail != "" {
+		who := a.userName
+		if who == "" {
+			who = a.userEmail
+		}
+		identity = s.Accent2.Render("@ "+who) + s.Subtle.Render("  "+a.userEmail)
+	}
 	left := s.Title.Render("digger") + "  " + s.Subtle.Render("→ "+snap.RelayAddr) + "  " + statusStyle.Render("● "+statusText)
-	headerLine := lipgloss.JoinHorizontal(lipgloss.Left, left, "    ", traffic)
+	right := identity + "    " + traffic
+	headerLine := lipgloss.JoinHorizontal(lipgloss.Left, left, "    ", right)
 	return s.Box.
 		BorderForeground(a.theme.Accent).
 		Width(a.contentWidth()).
