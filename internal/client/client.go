@@ -257,6 +257,17 @@ func (c *Client) runSession(ctx context.Context, conn net.Conn) error {
 	in := make(chan proto.ServerMsg, 256)
 	errs := make(chan error, 2)
 
+	// Pump goroutines write to `out`. We can't safely close `out` while
+	// they're still running, so signal "session over" via this channel.
+	sessionDone := make(chan struct{})
+	closeOnce := func() {
+		select {
+		case <-sessionDone:
+		default:
+			close(sessionDone)
+		}
+	}
+
 	// re-register tunnels and queue any pending commands.
 	c.mu.Lock()
 	for _, t := range c.tunnels {
@@ -287,11 +298,18 @@ func (c *Client) runSession(ctx context.Context, conn net.Conn) error {
 			in <- m
 		}
 	}()
-	// writer goroutine
+	// writer goroutine — exits on sessionDone instead of close(out)
+	// so we don't have to coordinate channel-close ordering with the
+	// per-connection pump goroutines.
 	go func() {
-		for m := range out {
-			if err := c.write(conn, m); err != nil {
-				errs <- err
+		for {
+			select {
+			case m := <-out:
+				if err := c.write(conn, m); err != nil {
+					errs <- err
+					return
+				}
+			case <-sessionDone:
 				return
 			}
 		}
@@ -319,10 +337,10 @@ func (c *Client) runSession(ctx context.Context, conn net.Conn) error {
 	for {
 		select {
 		case <-ctx.Done():
-			close(out)
+			closeOnce()
 			return nil
 		case err := <-errs:
-			close(out)
+			closeOnce()
 			return err
 		case cmd := <-c.cmds:
 			switch v := cmd.(type) {
@@ -357,17 +375,26 @@ func (c *Client) runSession(ctx context.Context, conn net.Conn) error {
 			}
 		case m, ok := <-in:
 			if !ok {
-				close(out)
+				closeOnce()
 				return io.EOF
 			}
-			c.handleIn(m, out, tcpLocal, udpSessions)
+			c.handleIn(m, out, sessionDone, tcpLocal, udpSessions)
 		}
+	}
+}
+
+// trySend posts on out unless the session is over.
+func trySend(out chan<- proto.ClientMsg, done <-chan struct{}, m proto.ClientMsg) {
+	select {
+	case out <- m:
+	case <-done:
 	}
 }
 
 func (c *Client) handleIn(
 	m proto.ServerMsg,
 	out chan<- proto.ClientMsg,
+	done <-chan struct{},
 	tcpLocal map[uint64]chan []byte,
 	udpSessions map[struct {
 		tid  uint32
@@ -405,7 +432,7 @@ func (c *Client) handleIn(
 		c.mu.Unlock()
 		c.log("tunnel %d denied: %s", m.TunnelDeny.Tid, m.TunnelDeny.Reason)
 	case m.NewTcpConn != nil:
-		c.handleNewTcp(*m.NewTcpConn, out, tcpLocal)
+		c.handleNewTcp(*m.NewTcpConn, out, done, tcpLocal)
 	case m.TcpData != nil:
 		ch, ok := tcpLocal[m.TcpData.Conn]
 		if ok {
@@ -421,13 +448,13 @@ func (c *Client) handleIn(
 			delete(tcpLocal, m.TcpClose.Conn)
 		}
 	case m.UdpData != nil:
-		c.handleInUdp(*m.UdpData, out, udpSessions)
+		c.handleInUdp(*m.UdpData, out, done, udpSessions)
 	case m.Ping:
-		out <- proto.ClientMsg{Pong: true}
+		trySend(out, done, proto.ClientMsg{Pong: true})
 	}
 }
 
-func (c *Client) handleNewTcp(n proto.NewTcpConn, out chan<- proto.ClientMsg, tcpLocal map[uint64]chan []byte) {
+func (c *Client) handleNewTcp(n proto.NewTcpConn, out chan<- proto.ClientMsg, done <-chan struct{}, tcpLocal map[uint64]chan []byte) {
 	c.mu.Lock()
 	var local string
 	for _, t := range c.tunnels {
@@ -439,20 +466,20 @@ func (c *Client) handleNewTcp(n proto.NewTcpConn, out chan<- proto.ClientMsg, tc
 	}
 	c.mu.Unlock()
 	if local == "" {
-		out <- proto.ClientMsg{TcpClose: &proto.TcpClose{Conn: n.Conn}}
+		trySend(out, done, proto.ClientMsg{TcpClose: &proto.TcpClose{Conn: n.Conn}})
 		return
 	}
 	c.log("conn %d from %s → %s", n.Conn, n.Peer, local)
 	ch := make(chan []byte, 64)
 	tcpLocal[n.Conn] = ch
-	go pumpLocalTcp(local, n.Conn, ch, out, c)
+	go pumpLocalTcp(local, n.Conn, ch, out, done, c)
 }
 
-func pumpLocalTcp(local string, conn uint64, ch chan []byte, out chan<- proto.ClientMsg, c *Client) {
+func pumpLocalTcp(local string, conn uint64, ch chan []byte, out chan<- proto.ClientMsg, done <-chan struct{}, c *Client) {
 	dialer := net.Dialer{Timeout: 5 * time.Second}
 	cnx, err := dialer.Dial("tcp", local)
 	if err != nil {
-		out <- proto.ClientMsg{TcpClose: &proto.TcpClose{Conn: conn}}
+		trySend(out, done, proto.ClientMsg{TcpClose: &proto.TcpClose{Conn: conn}})
 		c.log("conn %d dial %s failed: %v", conn, local, err)
 		return
 	}
@@ -480,11 +507,11 @@ func pumpLocalTcp(local string, conn uint64, ch chan []byte, out chan<- proto.Cl
 		if n > 0 {
 			data := make([]byte, n)
 			copy(data, buf[:n])
-			out <- proto.ClientMsg{TcpData: &proto.TcpData{Conn: conn, Data: data}}
+			trySend(out, done, proto.ClientMsg{TcpData: &proto.TcpData{Conn: conn, Data: data}})
 			atomic.AddUint64(&c.bytesUp, uint64(n))
 		}
 		if err != nil {
-			out <- proto.ClientMsg{TcpClose: &proto.TcpClose{Conn: conn}}
+			trySend(out, done, proto.ClientMsg{TcpClose: &proto.TcpClose{Conn: conn}})
 			return
 		}
 	}
@@ -493,6 +520,7 @@ func pumpLocalTcp(local string, conn uint64, ch chan []byte, out chan<- proto.Cl
 func (c *Client) handleInUdp(
 	u proto.UdpData,
 	out chan<- proto.ClientMsg,
+	done <-chan struct{},
 	sessions map[struct {
 		tid  uint32
 		peer string
@@ -536,9 +564,9 @@ func (c *Client) handleInUdp(
 				}
 				data := make([]byte, n)
 				copy(data, buf[:n])
-				out <- proto.ClientMsg{UdpData: &proto.UdpData{
+				trySend(out, done, proto.ClientMsg{UdpData: &proto.UdpData{
 					Tid: u.Tid, Peer: u.Peer, Data: data,
-				}}
+				}})
 				atomic.AddUint64(&c.bytesUp, uint64(n))
 			}
 		}()

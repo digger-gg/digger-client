@@ -14,7 +14,18 @@ LDFLAGS  = -X 'main.defaultSignup=$(SIGNUP)' -X 'main.defaultJoin=$(JOIN)'
 OUT ?= digger
 
 .PHONY: tui all archives bare clean linux darwin-arm64 darwin-amd64 windows \
-        archive-linux-amd64 archive-darwin-arm64 archive-darwin-amd64 archive-windows-amd64
+        archive-linux-amd64 archive-darwin-arm64 archive-darwin-amd64 archive-windows-amd64 \
+        test e2e
+
+# Unit + table-driven tests across all packages.
+test:
+	$(GO) test ./...
+
+# End-to-end: spins up a real relay, opens a tunnel, round-trips an
+# HTTP request through it. Requires a built relay binary.
+RELAY_BIN ?= /home/ando/code/playit-lite/relay/target/release/playit-lite-relay
+e2e:
+	$(GO) run ./cmd/e2e --relay-bin $(RELAY_BIN)
 
 tui:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(OUT) ./cmd/digger
