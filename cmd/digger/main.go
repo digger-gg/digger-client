@@ -32,7 +32,7 @@ var (
 	defaultJoin   = ""
 	defaultSignup = "http://digger.gg:7778/"
 	defaultAuth   = "https://digger.gg"
-	version       = "v0.2.1"
+	version       = "v0.4.0"
 )
 
 func main() {
@@ -68,6 +68,7 @@ usage:
 func cmdRun(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	signupFlag := fs.String("signup", "", "signup URL — fetch a join string then save")
+	skipAuth := fs.Bool("no-auth", false, "skip the sign-in step (for development)")
 	fs.Parse(args)
 
 	opts := ui.RunOptions{}
@@ -84,6 +85,15 @@ func cmdRun(args []string) {
 	}
 
 	loaded, _ := cfg.Load()
+
+	// Auto-login if we don't have an identity yet. The user can opt out
+	// with --no-auth or by setting an explicit join string on the cmdline.
+	if !*skipAuth && loaded.Token == "" && join == "" {
+		if err := runLogin(&loaded); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
 
 	switch {
 	case join != "":
@@ -115,34 +125,34 @@ func cmdRun(args []string) {
 	}
 }
 
-func cmdLogin(args []string) int {
-	fs := flag.NewFlagSet("login", flag.ExitOnError)
-	at := fs.String("at", defaultAuth, "auth server base URL")
-	fs.Parse(args)
-
+// runLogin performs the device-code flow and updates `c` in place. Used
+// both by the standalone `digger login` subcommand and by the auto-login
+// step at the start of `digger`.
+func runLogin(c *cfg.Config) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-
-	fmt.Println("digger login")
-	res, err := auth.Login(ctx, *at, func(line string) {
+	fmt.Println("digger — sign in to continue")
+	res, err := auth.Login(ctx, defaultAuth, func(line string) {
 		fmt.Println(line)
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "login failed:", err)
-		return 1
+		return fmt.Errorf("sign-in failed: %w", err)
 	}
-
-	c, _ := cfg.Load()
 	c.Token = res.Token
 	c.UserUID = res.User.UID
 	c.UserEmail = res.User.Email
 	c.UserName = res.User.DisplayName
 	c.UserPicture = res.User.PhotoURL
-	if err := cfg.Save(c); err != nil {
-		fmt.Fprintln(os.Stderr, "couldn't save:", err)
+	return cfg.Save(*c)
+}
+
+func cmdLogin(args []string) int {
+	c, _ := cfg.Load()
+	if err := runLogin(&c); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Println("\n  saved to ~/.config/digger/config.toml")
+	fmt.Println("  saved to ~/.config/digger/config.toml")
 	return 0
 }
 

@@ -89,6 +89,7 @@ type Config struct {
 	Relay  string
 	Secret string
 	Name   string
+	Token  string // Firebase ID token from `digger login`
 }
 
 const logLimit = 200
@@ -227,8 +228,12 @@ func (c *Client) runSession(ctx context.Context, conn net.Conn) error {
 	if c.cfg.Secret != "" {
 		sec = &c.cfg.Secret
 	}
+	var tok *string
+	if c.cfg.Token != "" {
+		tok = &c.cfg.Token
+	}
 	if err := c.write(conn, proto.ClientMsg{Hello: &proto.Hello{
-		Version: proto.ProtoVersion, Secret: sec, Name: c.cfg.Name,
+		Version: proto.ProtoVersion, Secret: sec, Name: c.cfg.Name, Token: tok,
 	}}); err != nil {
 		return err
 	}

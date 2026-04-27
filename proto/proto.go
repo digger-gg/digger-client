@@ -31,6 +31,7 @@ type Hello struct {
 	Version uint32  `msgpack:"version"`
 	Secret  *string `msgpack:"secret"`
 	Name    string  `msgpack:"name"`
+	Token   *string `msgpack:"token,omitempty"` // Firebase ID token from `digger login`
 }
 
 type OpenTunnel struct {
